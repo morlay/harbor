@@ -1,6 +1,7 @@
 ARG harbor_base_image_version
 ARG harbor_base_namespace
-FROM node:16.18.0 as nodeportal
+# only need to build once on amd64 host
+FROM --platform=${BUILDPLATFORM:-linux/amd64} node:16.18.0 as nodeportal
 
 WORKDIR /build_dir
 
@@ -18,6 +19,7 @@ RUN npm run generate-build-timestamp
 RUN node --max_old_space_size=2048 'node_modules/@angular/cli/bin/ng' build --configuration production
 RUN python -c 'import sys, yaml, json; y=yaml.load(sys.stdin.read()); print json.dumps(y)' < swagger.yaml > dist/swagger.json
 
+RUN cp swagger.yaml dist
 COPY ./LICENSE /build_dir/dist
 
 RUN cd app-swagger-ui && npm install --unsafe-perm
