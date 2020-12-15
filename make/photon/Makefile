@@ -16,12 +16,15 @@ WGET=$(shell which wget)
 CURL=$(shell which curl)
 TIMESTAMP=$(shell date +"%Y%m%d")
 
+TARGETARCHS=amd64 arm64
+
 # docker parameters
 DOCKERCMD=$(shell which docker)
-DOCKERBUILD=$(DOCKERCMD) build --no-cache
-DOCKERBUILD_WITH_PULL_PARA=$(DOCKERBUILD) --pull=$(PULL_BASE_FROM_DOCKERHUB)
+DOCKERBUILD=$(DOCKERCMD) build --no-cache $(foreach arch,${TARGETARCHS},--platform=linux/${arch})
+DOCKERBUILD_WITH_PULL_PARA=$(DOCKERCMD) buildx build --push $(foreach arch,${TARGETARCHS},--platform=linux/${arch})
 DOCKERRMIMAGE=$(DOCKERCMD) rmi
 DOCKERIMAGES=$(DOCKERCMD) images
+
 IMAGENAMESPACE=goharbor
 BASEIMAGENAMESPACE=goharbor
 
@@ -181,7 +184,7 @@ _build_registry:
 		cd $(DOCKERFILEPATH_REG) && $(DOCKERFILEPATH_REG)/builder $(REGISTRY_SRC_TAG) $(DISTRIBUTION_SRC) $(GOBUILDIMAGE) && cd - ; \
 	fi
 	@echo "building registry container for photon..."
-	@chmod 655 $(DOCKERFILEPATH_REG)/binary/registry && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_REG)/$(DOCKERFILENAME_REG) -t $(DOCKERIMAGENAME_REG):$(VERSIONTAG) .
+	@chmod 655 $(DOCKERFILEPATH_REG)/binary/registry* && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_REG)/$(DOCKERFILENAME_REG) -t $(DOCKERIMAGENAME_REG):$(VERSIONTAG) .
 	@echo "Done."
 
 _build_registryctl:
