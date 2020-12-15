@@ -97,7 +97,7 @@ BUILD_BASE=true
 PUSHBASEIMAGE=false
 BASEIMAGETAG=dev
 BUILDBASETARGET=chartserver trivy-adapter core db jobservice log nginx notary-server notary-signer portal prepare redis registry registryctl exporter
-BASEIMAGENAMESPACE=goharbor
+BASEIMAGENAMESPACE=$(REGISTRYPROJECTNAME)
 # #input true/false only
 PULL_BASE_FROM_DOCKERHUB=true
 
@@ -147,6 +147,19 @@ DOCKERIMAGES=$(DOCKERCMD) images
 DOCKERSAVE=$(DOCKERCMD) save
 DOCKERCOMPOSECMD=$(shell which docker-compose)
 DOCKERTAG=$(DOCKERCMD) tag
+
+TARGETARCHS=amd64
+MULTIARCH=false
+
+# image labels could set by env var IMAGELABELS
+IMAGELABELS?=
+
+ifeq ($(MULTIARCH),true)
+	# when MULTIARCH enabled, must BUILDBIN=true for build multi-arch binaries of deps
+	BUILDBIN=true
+	TARGETARCHS=amd64 arm64
+	DOCKERBUILD=DOCKER_CLI_EXPERIMENTAL="enabled" $(DOCKERCMD) buildx build --no-cache --pull --push $(foreach arch,${TARGETARCHS},--platform=linux/${arch}) $(foreach label,${IMAGELABELS},--label=${label})
+endif
 
 # go parameters
 GOCMD=$(shell which go)
@@ -229,15 +242,15 @@ MAKEFILEPATH_PHOTON=$(MAKEPATH)/photon
 DOCKERFILEPATH_COMMON=$(MAKEPATH)/common
 
 # docker image name
-DOCKER_IMAGE_NAME_PREPARE=goharbor/prepare
-DOCKERIMAGENAME_PORTAL=goharbor/harbor-portal
-DOCKERIMAGENAME_CORE=goharbor/harbor-core
-DOCKERIMAGENAME_JOBSERVICE=goharbor/harbor-jobservice
-DOCKERIMAGENAME_LOG=goharbor/harbor-log
-DOCKERIMAGENAME_DB=goharbor/harbor-db
-DOCKERIMAGENAME_CHART_SERVER=goharbor/chartmuseum-photon
-DOCKERIMAGENAME_REGCTL=goharbor/harbor-registryctl
-DOCKERIMAGENAME_EXPORTER=goharbor/harbor-exporter
+DOCKER_IMAGE_NAME_PREPARE=$(REGISTRYPROJECTNAME)/prepare
+DOCKERIMAGENAME_PORTAL=$(REGISTRYPROJECTNAME)/harbor-portal
+DOCKERIMAGENAME_CORE=$(REGISTRYPROJECTNAME)/harbor-core
+DOCKERIMAGENAME_JOBSERVICE=$(REGISTRYPROJECTNAME)/harbor-jobservice
+DOCKERIMAGENAME_LOG=$(REGISTRYPROJECTNAME)/harbor-log
+DOCKERIMAGENAME_DB=$(REGISTRYPROJECTNAME)/harbor-db
+DOCKERIMAGENAME_CHART_SERVER=$(REGISTRYPROJECTNAME)/chartmuseum-photon
+DOCKERIMAGENAME_REGCTL=$(REGISTRYPROJECTNAME)/harbor-registryctl
+DOCKERIMAGENAME_EXPORTER=$(REGISTRYPROJECTNAME)/harbor-exporter
 
 # docker-compose files
 DOCKERCOMPOSEFILEPATH=$(MAKEPATH)
@@ -270,9 +283,9 @@ DOCKERSAVE_PARA=$(DOCKER_IMAGE_NAME_PREPARE):$(VERSIONTAG) \
 		$(DOCKERIMAGENAME_JOBSERVICE):$(VERSIONTAG) \
 		$(DOCKERIMAGENAME_REGCTL):$(VERSIONTAG) \
 		$(DOCKERIMAGENAME_EXPORTER):$(VERSIONTAG) \
-		goharbor/redis-photon:$(VERSIONTAG) \
-		goharbor/nginx-photon:$(VERSIONTAG) \
-		goharbor/registry-photon:$(VERSIONTAG)
+		$(REGISTRYPROJECTNAME)/redis-photon:$(VERSIONTAG) \
+		$(REGISTRYPROJECTNAME)/nginx-photon:$(VERSIONTAG) \
+		$(REGISTRYPROJECTNAME)/registry-photon:$(VERSIONTAG)
 
 PACKAGE_OFFLINE_PARA=-zcvf harbor-offline-installer-$(PKGVERSIONTAG).tgz \
 					$(HARBORPKG)/$(DOCKERIMGFILE).$(VERSIONTAG).tar.gz \
@@ -291,16 +304,15 @@ PACKAGE_ONLINE_PARA=-zcvf harbor-online-installer-$(PKGVERSIONTAG).tgz \
 DOCKERCOMPOSE_FILE_OPT=-f $(DOCKERCOMPOSEFILEPATH)/$(DOCKERCOMPOSEFILENAME)
 
 ifeq ($(NOTARYFLAG), true)
-	DOCKERSAVE_PARA+= goharbor/notary-server-photon:$(VERSIONTAG) goharbor/notary-signer-photon:$(VERSIONTAG)
+	DOCKERSAVE_PARA+= $(REGISTRYPROJECTNAME)/notary-server-photon:$(VERSIONTAG) $(REGISTRYPROJECTNAME)/notary-signer-photon:$(VERSIONTAG)
 endif
 ifeq ($(TRIVYFLAG), true)
-	DOCKERSAVE_PARA+= goharbor/trivy-adapter-photon:$(VERSIONTAG)
+	DOCKERSAVE_PARA+= $(REGISTRYPROJECTNAME)/trivy-adapter-photon:$(VERSIONTAG)
 endif
 # append chartmuseum parameters if set
 ifeq ($(CHARTFLAG), true)
 	DOCKERSAVE_PARA+= $(DOCKERIMAGENAME_CHART_SERVER):$(VERSIONTAG)
 endif
-
 
 RUNCONTAINER=$(DOCKERCMD) run --rm -u $(shell id -u):$(shell id -g) -v $(BUILDPATH):$(BUILDPATH) -w $(BUILDPATH)
 
@@ -314,7 +326,7 @@ define prepare_docker_image
 endef
 
 # lint swagger doc
-SPECTRAL_IMAGENAME=goharbor/spectral
+SPECTRAL_IMAGENAME=$(BASEIMAGENAMESPACE)/spectral
 SPECTRAL_VERSION=v5.9.1
 SPECTRAL_IMAGE_BUILD_CMD=${DOCKERBUILD} -f ${TOOLSPATH}/spectral/Dockerfile --build-arg GOLANG=${GOBUILDIMAGE} --build-arg SPECTRAL_VERSION=${SPECTRAL_VERSION} -t ${SPECTRAL_IMAGENAME}:$(SPECTRAL_VERSION) .
 SPECTRAL=$(RUNCONTAINER) $(SPECTRAL_IMAGENAME):$(SPECTRAL_VERSION)
@@ -323,7 +335,7 @@ lint_apis:
 	$(call prepare_docker_image,${SPECTRAL_IMAGENAME},${SPECTRAL_VERSION},${SPECTRAL_IMAGE_BUILD_CMD})
 	$(SPECTRAL) lint ./api/v2.0/swagger.yaml
 
-SWAGGER_IMAGENAME=goharbor/swagger
+SWAGGER_IMAGENAME=$(BASEIMAGENAMESPACE)/swagger
 SWAGGER_VERSION=v0.25.0
 SWAGGER=$(RUNCONTAINER) ${SWAGGER_IMAGENAME}:${SWAGGER_VERSION}
 SWAGGER_GENERATE_SERVER=${SWAGGER} generate server --template-dir=$(TOOLSPATH)/swagger/templates --exclude-main --additional-initialism=CVE --additional-initialism=GC --additional-initialism=OIDC
@@ -344,7 +356,7 @@ gen_apis: lint_apis
 	$(call swagger_generate_server,api/v2.0/swagger.yaml,src/server/v2.0,harbor)
 
 
-MOCKERY_IMAGENAME=goharbor/mockery
+MOCKERY_IMAGENAME=$(REGISTRYPROJECTNAME)/mockery
 MOCKERY_VERSION=v2.1.0
 MOCKERY=$(RUNCONTAINER) ${MOCKERY_IMAGENAME}:${MOCKERY_VERSION}
 MOCKERY_IMAGE_BUILD_CMD=${DOCKERBUILD} -f ${TOOLSPATH}/mockery/Dockerfile --build-arg GOLANG=${GOBUILDIMAGE} --build-arg MOCKERY_VERSION=${MOCKERY_VERSION} -t ${MOCKERY_IMAGENAME}:$(MOCKERY_VERSION) .
@@ -372,42 +384,42 @@ check_environment:
 compile_core: gen_apis
 	@echo "compiling binary for core (golang image)..."
 	@echo $(GOBUILDPATHINCONTAINER)
-	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_CORE) $(GOBUILDIMAGE) $(GOIMAGEBUILD_CORE) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_CORE)/$(CORE_BINARYNAME)
+	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_CORE) $(GOBUILDIMAGE) sh -c 'set -eux; $(foreach targetarch,$(TARGETARCHS), GOARCH=$(targetarch) $(GOIMAGEBUILD_CORE) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_CORE)/binary/$(CORE_BINARYNAME)-linux-$(targetarch);)'
 	@echo "Done."
 
 compile_jobservice:
 	@echo "compiling binary for jobservice (golang image)..."
-	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_JOBSERVICE) $(GOBUILDIMAGE) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_JOBSERVICE)/$(JOBSERVICEBINARYNAME)
+	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_JOBSERVICE) $(GOBUILDIMAGE) sh -c 'set -eux; $(foreach targetarch,$(TARGETARCHS), GOARCH=$(targetarch) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_JOBSERVICE)/binary/$(JOBSERVICEBINARYNAME)-linux-$(targetarch);)'
 	@echo "Done."
 
 compile_registryctl:
 	@echo "compiling binary for harbor registry controller (golang image)..."
-	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_REGISTRYCTL) $(GOBUILDIMAGE) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_REGISTRYCTL)/$(REGISTRYCTLBINARYNAME)
+	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_REGISTRYCTL) $(GOBUILDIMAGE) sh -c 'set -eux; $(foreach targetarch,$(TARGETARCHS), GOARCH=$(targetarch) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_REGISTRYCTL)/binary/$(REGISTRYCTLBINARYNAME)-linux-$(targetarch);)'
 	@echo "Done."
 
 compile_notary_migrate_patch:
 	@echo "compiling binary for migrate patch (golang image)..."
-	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_MIGRATEPATCH) $(GOBUILDIMAGE) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_NOTARY)/$(MIGRATEPATCHBINARYNAME)
+	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_MIGRATEPATCH) $(GOBUILDIMAGE) sh -c 'set -eux; $(foreach targetarch,$(TARGETARCHS), GOARCH=$(targetarch) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_NOTARY)/binary/$(MIGRATEPATCHBINARYNAME)-linux-$(targetarch);)'
 	@echo "Done."
 
 compile_standalone_db_migrator:
 	@echo "compiling binary for standalone db migrator (golang image)..."
-	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_STANDALONE_DB_MIGRATOR) $(GOBUILDIMAGE) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_STANDALONE_DB_MIGRATOR)/$(STANDALONE_DB_MIGRATOR_BINARYNAME)
+	@$(DOCKERCMD) run --rm -v $(BUILDPATH):$(GOBUILDPATHINCONTAINER) -w $(GOBUILDPATH_STANDALONE_DB_MIGRATOR) $(GOBUILDIMAGE) sh -c 'set -eux; $(foreach targetarch,$(TARGETARCHS),GOARCH=$(targetarch) $(GOIMAGEBUILD_COMMON) -o $(GOBUILDPATHINCONTAINER)/$(GOBUILDMAKEPATH_STANDALONE_DB_MIGRATOR)/binary/$(STANDALONE_DB_MIGRATOR_BINARYNAME)-linux-$(targetarch);)'
 	@echo "Done."
 
 compile: check_environment versions_prepare compile_core compile_jobservice compile_registryctl compile_notary_migrate_patch
 
 update_prepare_version:
 	@echo "substitute the prepare version tag in prepare file..."
-	@$(SEDCMDI) -e 's/goharbor\/prepare:.*[[:space:]]\+/goharbor\/prepare:$(VERSIONTAG) prepare /' $(MAKEPATH)/prepare ;
+	@$(SEDCMDI) -e 's/$(REGISTRYPROJECTNAME)\/prepare:.*[[:space:]]\+/$(REGISTRYPROJECTNAME)\/prepare:$(VERSIONTAG) prepare /' $(MAKEPATH)/prepare ;
 
 gen_tls:
-	@$(DOCKERCMD) run --rm -v /:/hostfs:z goharbor/prepare:$(VERSIONTAG) gencert -p /etc/harbor/tls/internal
+	@$(DOCKERCMD) run --rm -v /:/hostfs:z $(REGISTRYPROJECTNAME)/prepare:$(VERSIONTAG) gencert -p /etc/harbor/tls/internal
 
 prepare: update_prepare_version
 	@echo "preparing..."
 	@if [ -n "$(GEN_TLS)" ] ; then \
-		$(DOCKERCMD) run --rm -v /:/hostfs:z goharbor/prepare:$(VERSIONTAG) gencert -p /etc/harbor/tls/internal; \
+		$(DOCKERCMD) run --rm -v /:/hostfs:z $(REGISTRYPROJECTNAME)/prepare:$(VERSIONTAG) gencert -p /etc/harbor/tls/internal; \
 	fi
 	@$(MAKEPATH)/$(PREPARECMD) $(PREPARECMD_PARA)
 
@@ -426,6 +438,7 @@ build:
 		exit 1; \
 	fi
 	make -f $(MAKEFILEPATH_PHOTON)/Makefile $(BUILDTARGET) -e DEVFLAG=$(DEVFLAG) -e GOBUILDIMAGE=$(GOBUILDIMAGE) \
+	 -e REGISTRYPROJECTNAME=$(REGISTRYPROJECTNAME) -e TARGETARCHS="$(TARGETARCHS)" -e DOCKERBUILD="$(DOCKERBUILD)" \
 	 -e REGISTRYVERSION=$(REGISTRYVERSION) -e REGISTRY_SRC_TAG=$(REGISTRY_SRC_TAG) \
 	 -e NOTARYVERSION=$(NOTARYVERSION) -e NOTARYMIGRATEVERSION=$(NOTARYMIGRATEVERSION) \
 	 -e TRIVYVERSION=$(TRIVYVERSION) -e TRIVYADAPTERVERSION=$(TRIVYADAPTERVERSION) \
@@ -482,7 +495,7 @@ package_online: update_prepare_version
 	@echo "packing online package ..."
 	@cp -r make $(HARBORPKG)
 	@if [ -n "$(REGISTRYSERVER)" ] ; then \
-		$(SEDCMDI) -e 's/image\: goharbor/image\: $(REGISTRYSERVER)\/$(REGISTRYPROJECTNAME)/' \
+		$(SEDCMDI) -e 's/image\: $(REGISTRYPROJECTNAME)/image\: $(REGISTRYSERVER)\/$(REGISTRYPROJECTNAME)/' \
 		$(HARBORPKG)/docker-compose.yml ; \
 	fi
 	@cp LICENSE $(HARBORPKG)/LICENSE
@@ -614,10 +627,6 @@ swagger_client:
 
 cleanbinary:
 	@echo "cleaning binary..."
-	if [ -f $(CORE_BINARYPATH)/$(CORE_BINARYNAME) ] ; then rm $(CORE_BINARYPATH)/$(CORE_BINARYNAME) ; fi
-	if [ -f $(JOBSERVICEBINARYPATH)/$(JOBSERVICEBINARYNAME) ] ; then rm $(JOBSERVICEBINARYPATH)/$(JOBSERVICEBINARYNAME) ; fi
-	if [ -f $(REGISTRYCTLBINARYPATH)/$(REGISTRYCTLBINARYNAME) ] ; then rm $(REGISTRYCTLBINARYPATH)/$(REGISTRYCTLBINARYNAME) ; fi
-	if [ -f $(MIGRATEPATCHBINARYPATH)/$(MIGRATEPATCHBINARYNAME) ] ; then rm $(MIGRATEPATCHBINARYPATH)/$(MIGRATEPATCHBINARYNAME) ; fi
 	rm -rf make/photon/*/binary/
 
 cleanbaseimage:
