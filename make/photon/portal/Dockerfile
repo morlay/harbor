@@ -1,7 +1,8 @@
 ARG harbor_base_image_version
 ARG harbor_base_namespace
 ARG NODE
-FROM ${NODE} as nodeportal
+# only need to build once on amd64 host
+FROM --platform=${BUILDPLATFORM:-linux/amd64} ${NODE} as nodeportal
 
 WORKDIR /build_dir
 
