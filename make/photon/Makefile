@@ -16,12 +16,15 @@ WGET=$(shell which wget)
 CURL=$(shell which curl)
 TIMESTAMP=$(shell date +"%Y%m%d")
 
+TARGETARCHS=amd64 arm64
+
 # docker parameters
 DOCKERCMD=$(shell which docker)
-DOCKERBUILD=$(DOCKERCMD) build --no-cache
-DOCKERBUILD_WITH_PULL_PARA=$(DOCKERBUILD) --pull=$(PULL_BASE_FROM_DOCKERHUB)
+DOCKERBUILD=$(DOCKERCMD) build --no-cache $(foreach arch,${TARGETARCHS},--platform=linux/${arch})
+DOCKERBUILD_WITH_PULL_PARA=$(DOCKERCMD) buildx build --push $(foreach arch,${TARGETARCHS},--platform=linux/${arch})
 DOCKERRMIMAGE=$(DOCKERCMD) rmi
 DOCKERIMAGES=$(DOCKERCMD) images
+
 IMAGENAMESPACE=goharbor
 BASEIMAGENAMESPACE=goharbor
 
@@ -117,6 +120,14 @@ DOCKERFILEPATH_EXPORTER=$(DOCKERFILEPATH)/$(EXPORTER)
 DOCKERFILENAME_EXPORTER=Dockerfile
 DOCKERIMAGENAME_EXPORTER=$(IMAGENAMESPACE)/harbor-$(EXPORTER)
 
+# for chart server (chartmuseum)
+CHARTSERVER=chartserver
+DOCKERFILEPATH_CHART_SERVER=$(DOCKERFILEPATH)/$(CHARTSERVER)
+DOCKERFILENAME_CHART_SERVER=Dockerfile
+CHART_SERVER_CODE_BASE=https://github.com/helm/chartmuseum.git
+CHART_SERVER_MAIN_PATH=cmd/chartmuseum
+CHART_SERVER_BIN_NAME=chartm
+
 _build_prepare:
 	@$(call _build_base,$(PREPARE),$(DOCKERFILEPATH_PREPARE))
 	@echo "building prepare container for photon..."
@@ -176,6 +187,21 @@ _build_trivy_adapter:
 		echo "Done." ; \
 	fi
 
+_build_chart_server:
+	@if [ "$(CHARTFLAG)" = "true" ] ; then \
+		$(call _build_base,$(CHARTSERVER),$(DOCKERFILEPATH_CHART_SERVER)); \
+		if [ "$(BUILDBIN)" != "true" ] ; then \
+			rm -rf $(DOCKERFILEPATH_CHART_SERVER)/binary && mkdir -p $(DOCKERFILEPATH_CHART_SERVER)/binary && \
+			$(call _get_binary, $(CHARTURL), $(DOCKERFILEPATH_CHART_SERVER)/binary/chartm); \
+		else \
+			cd $(DOCKERFILEPATH_CHART_SERVER) && TARGETARCHS="$(TARGETARCHS)" $(DOCKERFILEPATH_CHART_SERVER)/builder $(GOBUILDIMAGE) $(CHART_SERVER_CODE_BASE) $(CHARTMUSEUM_SRC_TAG) $(CHART_SERVER_MAIN_PATH) $(CHART_SERVER_BIN_NAME) && cd - ; \
+		fi ; \
+		echo "building chartmuseum container for photon..." ; \
+		$(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_CHART_SERVER)/$(DOCKERFILENAME_CHART_SERVER) -t $(DOCKERIMAGENAME_CHART_SERVER):$(VERSIONTAG) . ; \
+		rm -rf $(DOCKERFILEPATH_CHART_SERVER)/binary; \
+		echo "Done." ; \
+	fi
+
 _build_nginx:
 	@$(call _build_base,$(NGINX),$(DOCKERFILEPATH_NGINX))
 	@echo "building nginx container for photon..."
@@ -191,12 +217,12 @@ _build_notary:
 			$(call _get_binary, $(NOTARYURL), $(DOCKERFILEPATH_NOTARY)/binary-bundle.tgz); \
 			cd $(DOCKERFILEPATH_NOTARY) && tar -zvxf binary-bundle.tgz && cd - ; \
 		else \
-			cd $(DOCKERFILEPATH_NOTARY) && $(DOCKERFILEPATH_NOTARY)/builder $(NOTARYVERSION) $(NOTARYMIGRATEVERSION) && cd - ; \
+			cd $(DOCKERFILEPATH_NOTARY) && TARGETARCHS="$(TARGETARCHS)" $(DOCKERFILEPATH_NOTARY)/builder $(NOTARYVERSION) $(NOTARYMIGRATEVERSION) && cd - ; \
 		fi ; \
 		echo "building notary container for photon..."; \
-		chmod 655 $(DOCKERFILEPATH_NOTARY)/binary/notary-signer && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_NOTARYSIGNER)/$(DOCKERFILENAME_NOTARYSIGNER) -t $(DOCKERIMAGENAME_NOTARYSIGNER):$(VERSIONTAG) . ; \
-		chmod 655 $(DOCKERFILEPATH_NOTARY)/binary/notary-server && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_NOTARYSERVER)/$(DOCKERFILENAME_NOTARYSERVER) -t $(DOCKERIMAGENAME_NOTARYSERVER):$(VERSIONTAG) . ; \
-		rm -rf $(DOCKERFILEPATH_NOTARY)/binary; \
+		sudo chmod 655 $(DOCKERFILEPATH_NOTARY)/binary/notary-signer* && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_NOTARYSIGNER)/$(DOCKERFILENAME_NOTARYSIGNER) -t $(DOCKERIMAGENAME_NOTARYSIGNER):$(VERSIONTAG) . ; \
+		sudo chmod 655 $(DOCKERFILEPATH_NOTARY)/binary/notary-server* && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_NOTARYSERVER)/$(DOCKERFILENAME_NOTARYSERVER) -t $(DOCKERIMAGENAME_NOTARYSERVER):$(VERSIONTAG) . ; \
+		sudo rm -rf $(DOCKERFILEPATH_NOTARY)/binary; \
 		echo "Done."; \
 	fi
 
@@ -206,10 +232,10 @@ _build_registry:
 		rm -rf $(DOCKERFILEPATH_REG)/binary && mkdir -p $(DOCKERFILEPATH_REG)/binary && \
 		$(call _get_binary, $(REGISTRYURL), $(DOCKERFILEPATH_REG)/binary/registry); \
 	else \
-		cd $(DOCKERFILEPATH_REG) && $(DOCKERFILEPATH_REG)/builder $(REGISTRY_SRC_TAG) && cd - ; \
+		cd $(DOCKERFILEPATH_REG) && TARGETARCHS="$(TARGETARCHS)" $(DOCKERFILEPATH_REG)/builder $(REGISTRY_SRC_TAG) && cd - ; \
 	fi
 	@echo "building registry container for photon..."
-	@chmod 655 $(DOCKERFILEPATH_REG)/binary/registry && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_REG)/$(DOCKERFILENAME_REG) -t $(DOCKERIMAGENAME_REG):$(VERSIONTAG) .
+	@chmod 655 $(DOCKERFILEPATH_REG)/binary/registry* && $(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_REG)/$(DOCKERFILENAME_REG) -t $(DOCKERIMAGENAME_REG):$(VERSIONTAG) .
 	@echo "Done."
 
 _build_registryctl:
@@ -227,13 +253,13 @@ _build_redis:
 
 _build_standalone_db_migrator:
 	@echo "building standalone db migrator image for photon..."
-	$(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_STANDALONE_DB_MIGRATOR)/$(DOCKERFILENAME_STANDALONE_DB_MIGRATOR) -t $(DOCKERIMAGENAME_STANDALONE_DB_MIGRATOR):$(VERSIONTAG) .
+	@$(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) -f $(DOCKERFILEPATH_STANDALONE_DB_MIGRATOR)/$(DOCKERFILENAME_STANDALONE_DB_MIGRATOR) -t $(DOCKERIMAGENAME_STANDALONE_DB_MIGRATOR):$(VERSIONTAG) .
 	@echo "Done."
 
 _compile_and_build_exporter:
 	@$(call _build_base,$(EXPORTER),$(DOCKERFILEPATH_EXPORTER))
 	@echo "compiling and building image for exporter..."
-	@$(DOCKERCMD) build --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) --build-arg build_image=$(GOBUILDIMAGE) -f ${DOCKERFILEPATH_EXPORTER}/${DOCKERFILENAME_EXPORTER} -t $(DOCKERIMAGENAME_EXPORTER):$(VERSIONTAG) .
+	@$(DOCKERBUILD_WITH_PULL_PARA) --build-arg harbor_base_image_version=$(BASEIMAGETAG) --build-arg harbor_base_namespace=$(BASEIMAGENAMESPACE) --build-arg build_image=$(GOBUILDIMAGE) -f ${DOCKERFILEPATH_EXPORTER}/${DOCKERFILENAME_EXPORTER} -t $(DOCKERIMAGENAME_EXPORTER):$(VERSIONTAG) .
 	@echo "Done."
 
 define _extract_archive
